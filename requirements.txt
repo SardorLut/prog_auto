@@ -1,0 +1,4 @@
+jsonschema>=4.23,<5
+setuptools<81
+mldev[base,jupyter] @ git+https://gitlab.com/mlrep/mldev.git@0e02ab6c2e069b7b519285f23194c9fdf598d0c7
+dvc[s3]>=3,<4
