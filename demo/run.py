@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -59,16 +61,51 @@ def rendered_prompt(phase: str) -> str:
     )
 
 
+def enforce_phase_boundary(phase: str) -> None:
+    """Удалить артефакты, которые модель создала раньше разрешённой фазы."""
+    if phase == "plan":
+        forbidden = (
+            "experiment.yml",
+            ".mldev",
+            ".dvc",
+            ".dvcignore",
+            "data",
+            "runs",
+        )
+    elif phase == "generate":
+        forbidden = ("runs",)
+    else:
+        return
+
+    for relative in forbidden:
+        path = WORKSPACE / relative
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+
 def run_phase(
     phase: str,
     model: str,
     run_name: str,
     env: dict[str, str],
     timeout: int,
+    attempt: int,
+    feedback: str,
 ) -> tuple[int, Path, Path]:
     """Запустить одну независимую сессию OpenCode."""
-    transcript = ARTIFACTS / f"{run_name}.{phase}.jsonl"
-    stderr_log = ARTIFACTS / f"{run_name}.{phase}.stderr.log"
+    prefix = f"{run_name}.{phase}.attempt-{attempt}"
+    transcript = ARTIFACTS / f"{prefix}.jsonl"
+    stderr_log = ARTIFACTS / f"{prefix}.stderr.log"
+    prompt = rendered_prompt(phase)
+    if feedback:
+        prompt += (
+            "\n\nПредыдущая попытка не прошла автоматическую проверку.\n"
+            "Исправь только файлы текущего этапа и снова выполни все его проверки.\n"
+            "Ошибки предыдущей попытки:\n"
+            f"{feedback}"
+        )
     command = [
         "opencode",
         "run",
@@ -80,8 +117,8 @@ def run_phase(
         "--model",
         model,
         "--title",
-        f"{run_name}-{phase}",
-        rendered_prompt(phase),
+        f"{run_name}-{phase}-attempt-{attempt}",
+        prompt,
     ]
 
     with transcript.open("w", encoding="utf-8") as stdout, stderr_log.open(
@@ -130,6 +167,26 @@ def plan_checkpoint() -> list[str]:
     )
     if validation.returncode != 0:
         errors.append(validation.stdout + validation.stderr)
+    else:
+        try:
+            plan_data = json.loads(plan.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            errors.append(f"план не читается: {error}")
+        else:
+            artifact_paths = {
+                artifact.get("path")
+                for artifact in plan_data.get("artifacts", [])
+            }
+            expected_results = (
+                "runs/<run_id>/hypothesis_1/result.json",
+                "runs/<run_id>/hypothesis_2/result.json",
+            )
+            for expected_path in expected_results:
+                if expected_path not in artifact_paths:
+                    errors.append(
+                        "план должен содержать артефакт с path="
+                        f"{expected_path}"
+                    )
 
     forbidden = ("experiment.yml", ".mldev", ".dvc", "data", "runs")
     for relative in forbidden:
@@ -170,6 +227,24 @@ def generation_checkpoint() -> list[str]:
                 )
         if "!Stage" in text or "mldev_dvc" in text:
             errors.append("experiment.yml содержит устаревшую DVC-интеграцию")
+        expected_declarations = (
+            r"^acquire_data:\s*&acquire_data\s+!BasicStage\s*$",
+            r"^prepare_data:\s*&prepare_data\s+!BasicStage\s*$",
+            r"^hypothesis_1:\s*&hypothesis_1\s+!JupyterStage\s*$",
+            r"^hypothesis_2:\s*&hypothesis_2\s+!JupyterStage\s*$",
+            r"^pipeline:\s*!GenericPipeline\s*$",
+        )
+        for pattern in expected_declarations:
+            if not re.search(pattern, text, re.MULTILINE):
+                errors.append(
+                    "experiment.yml содержит неверное объявление: "
+                    f"{pattern}"
+                )
+        for grouped_tag in ("!BasicStage:", "!JupyterStage:", "!GenericPipeline:"):
+            if grouped_tag in text:
+                errors.append(
+                    f"experiment.yml ошибочно использует тег как ключ: {grouped_tag}"
+                )
 
     dvc_config = WORKSPACE / ".dvc" / "config"
     if dvc_config.is_file():
@@ -206,6 +281,7 @@ def main() -> int:
     parser.add_argument("--model", default="chatwm/qwen3.5-9b")
     parser.add_argument("--run-name")
     parser.add_argument("--phase-timeout", type=int, default=600)
+    parser.add_argument("--max-phase-attempts", type=int, default=3)
     args = parser.parse_args()
 
     if not PYTHON.is_file():
@@ -236,28 +312,57 @@ def main() -> int:
     final_returncode = 0
 
     for phase, checkpoint in phases:
-        returncode, transcript, stderr_log = run_phase(
-            phase,
-            args.model,
-            run_name,
-            env,
-            args.phase_timeout,
-        )
-        checkpoint_errors = checkpoint() if returncode == 0 else []
-        checkpoint_log = ARTIFACTS / f"{run_name}.{phase}.checkpoint.log"
-        checkpoint_log.write_text(
-            "\n".join(checkpoint_errors)
-            + ("\n" if checkpoint_errors else "PASS\n"),
-            encoding="utf-8",
-        )
+        attempts: list[dict[str, object]] = []
+        feedback = ""
+        returncode = 1
+        checkpoint_errors: list[str] = []
+
+        for attempt in range(1, args.max_phase_attempts + 1):
+            returncode, transcript, stderr_log = run_phase(
+                phase,
+                args.model,
+                run_name,
+                env,
+                args.phase_timeout,
+                attempt,
+                feedback,
+            )
+            enforce_phase_boundary(phase)
+            checkpoint_errors = checkpoint() if returncode == 0 else [
+                f"OpenCode завершился с кодом {returncode}"
+            ]
+            checkpoint_log = (
+                ARTIFACTS
+                / f"{run_name}.{phase}.attempt-{attempt}.checkpoint.log"
+            )
+            checkpoint_log.write_text(
+                "\n".join(checkpoint_errors)
+                + ("\n" if checkpoint_errors else "PASS\n"),
+                encoding="utf-8",
+            )
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "returncode": returncode,
+                    "checkpoint_errors": checkpoint_errors,
+                    "transcript": str(transcript),
+                    "stderr": str(stderr_log),
+                    "checkpoint": str(checkpoint_log),
+                }
+            )
+            if returncode == 0 and not checkpoint_errors:
+                break
+            feedback = "\n".join(checkpoint_errors)
+
         phase_results.append(
             {
                 "phase": phase,
                 "returncode": returncode,
                 "checkpoint_errors": checkpoint_errors,
-                "transcript": str(transcript),
-                "stderr": str(stderr_log),
-                "checkpoint": str(checkpoint_log),
+                "attempts": attempts,
+                "transcript": attempts[-1]["transcript"],
+                "stderr": attempts[-1]["stderr"],
+                "checkpoint": attempts[-1]["checkpoint"],
             }
         )
         if returncode != 0 or checkpoint_errors:

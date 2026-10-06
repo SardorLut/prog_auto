@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "snapshot": false,
   "model": "chatwm/qwen3.5-9b",
   "provider": {
     "chatwm": {
@@ -18,8 +19,8 @@
             }
           },
           "limit": {
-            "context": 32768,
-            "output": 2560
+            "context": 65500,
+            "output": 8192
           }
         }
       }

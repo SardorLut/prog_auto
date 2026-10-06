@@ -15,15 +15,18 @@
 
 1. план с флагом `--require-resolved`;
 2. соответствие порядка стадий в плане и `experiment.yml`;
-3. отсутствие `!Stage` и `mldev_dvc`;
-4. отсутствие credentials в созданных файлах;
-5. доступность DVC remote.
+3. notebook pipelines заданы буквально как
+   `notebooks/hypothesis_1.all_cells` и
+   `notebooks/hypothesis_2.all_cells`, без расширения `.ipynb`;
+4. отсутствие `!Stage` и `mldev_dvc`;
+5. отсутствие credentials в созданных файлах;
+6. доступность DVC remote.
 
 Запусти pipeline только через helper:
 
 ```bash
-{PROJECT_ROOT}/.venv/bin/python \
-  {SKILL_ROOT}/helpers/run_mldev.py \
+venv/bin/python \
+  "$HOME/.config/opencode/skills/mldev-experiment-agent/helpers/run_mldev.py" \
   --repository . \
   --plan mldev-agent-plan.json \
   --experiment experiment.yml \

@@ -7,7 +7,7 @@ export CHATWM_TOKEN
 export MINIO_ROOT_USER MINIO_ROOT_PASSWORD
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION
 
-.PHONY: setup clean homework verify
+.PHONY: setup clean opencode homework verify
 
 setup:
 	@command -v python3.11 >/dev/null || { echo "Ошибка: нужен Python 3.11"; exit 1; }
@@ -20,6 +20,12 @@ setup:
 
 clean:
 	@python3 demo/reset.py
+
+opencode:
+	@test -n "$$CHATWM_TOKEN" || { echo "Ошибка: задайте CHATWM_TOKEN в .env"; exit 1; }
+	@test -d demo/workspace || { echo "Ошибка: сначала запустите make clean"; exit 1; }
+	@OPENCODE_CONFIG="$(CURDIR)/opencode.json" \
+		opencode demo/workspace -m "$(MODEL)"
 
 homework:
 	@test -n "$$CHATWM_TOKEN" || { echo "Ошибка: задайте CHATWM_TOKEN в .env"; exit 1; }

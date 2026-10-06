@@ -12,7 +12,7 @@
 
 Перед созданием плана прочитай полную схему:
 
-`{SKILL_ROOT}/schema/mldev-agent-plan-v1.schema.json`
+`~/.config/opencode/skills/mldev-experiment-agent/schema/mldev-agent-plan-v1.schema.json`
 
 Требования к плану:
 
@@ -25,6 +25,12 @@
 7. создай один строго последовательный pipeline;
 8. не придумывай отсутствующие команды или вычисления;
 9. используй `unresolved`, если доказательств недостаточно.
+10. пути результатов задай буквально:
+    - `runs/<run_id>/hypothesis_1/result.json`;
+    - `runs/<run_id>/hypothesis_2/result.json`.
+
+`<run_id>` — обязательный placeholder. Не заменяй его примером вроде
+`mldev-001`, датой или заранее выбранным идентификатором.
 
 Создай только:
 
@@ -35,8 +41,8 @@
 Проверь план:
 
 ```bash
-{PROJECT_ROOT}/.venv/bin/python \
-  {SKILL_ROOT}/helpers/validate_plan.py \
+venv/bin/python \
+  "$HOME/.config/opencode/skills/mldev-experiment-agent/helpers/validate_plan.py" \
   mldev-agent-plan.json \
   --repository .
 ```
